@@ -152,6 +152,40 @@ class TTSManagerModule(private val reactContext: ReactApplicationContext) : Reac
             }
     }
 
+    // Generate and save to WAV file method exposed to React Native
+    @ReactMethod
+    fun generate(text: String, sid: Int, speed: Double, promise: Promise) {
+        val trimmedText = text.trim()
+        if (trimmedText.isEmpty()) {
+            promise.reject("EMPTY_TEXT", "Input text is empty")
+            return
+        }
+
+        try {
+            val audio = tts?.generate(trimmedText, sid, speed.toFloat())
+
+            if (audio == null) {
+                promise.reject("GENERATION_ERROR", "TTS generation failed. Ensure TTS is initialized.")
+                return
+            }
+
+            val timestamp = System.currentTimeMillis()
+            val uuid = java.util.UUID.randomUUID().toString().substring(0, 8)
+            val filename = "tts_output_${timestamp}_${uuid}.wav"
+            val outputFile = File(reactContext.cacheDir, filename)
+
+            val success = writeWavFile(outputFile, audio.samples, audio.sampleRate)
+
+            if (success) {
+                promise.resolve(outputFile.absolutePath)
+            } else {
+                promise.reject("FILE_WRITE_ERROR", "Failed to write audio to WAV file")
+            }
+        } catch (e: Exception) {
+            promise.reject("GENERATION_ERROR", "Error during audio generation: ${e.message}")
+        }
+    }
+
     // Deinitialize method exposed to React Native
     @ReactMethod
     fun deinitialize() {
@@ -214,12 +248,83 @@ class TTSManagerModule(private val reactContext: ReactApplicationContext) : Reac
         // Emit the volume to JavaScript
         if (reactContext.hasActiveCatalystInstance()) {
             val params = Arguments.createMap()
-            
+
             params.putDouble("volume", volume.toDouble())
             println("kislaytest: Volume Update: $volume")
             reactContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("VolumeUpdate", params)
         }
+    }
+
+    /**
+     * Writes PCM float samples to a WAV file.
+     *
+     * @param file Output file
+     * @param samples Float array of audio samples
+     * @param sampleRate Sample rate in Hz
+     * @return true if successful, false otherwise
+     */
+    private fun writeWavFile(file: File, samples: FloatArray, sampleRate: Int): Boolean {
+        return try {
+            FileOutputStream(file).use { fos ->
+                val channels = 1
+                val bitsPerSample = 16
+                val byteRate = sampleRate * channels * bitsPerSample / 8
+                val blockAlign = channels * bitsPerSample / 8
+                val dataSize = samples.size * blockAlign
+
+                // RIFF header
+                fos.write("RIFF".toByteArray())
+                fos.write(intToLittleEndian(36 + dataSize))
+                fos.write("WAVE".toByteArray())
+
+                // fmt chunk
+                fos.write("fmt ".toByteArray())
+                fos.write(intToLittleEndian(16))
+                fos.write(shortToLittleEndian(1))
+                fos.write(shortToLittleEndian(channels.toShort()))
+                fos.write(intToLittleEndian(sampleRate))
+                fos.write(intToLittleEndian(byteRate))
+                fos.write(shortToLittleEndian(blockAlign.toShort()))
+                fos.write(shortToLittleEndian(bitsPerSample.toShort()))
+
+                // data chunk
+                fos.write("data".toByteArray())
+                fos.write(intToLittleEndian(dataSize))
+
+                // Convert float32 to int16 PCM
+                for (sample in samples) {
+                    val intSample = (sample * 32767f).coerceIn(-32768f, 32767f).toInt().toShort()
+                    fos.write(shortToLittleEndian(intSample))
+                }
+            }
+            true
+        } catch (e: IOException) {
+            android.util.Log.e("TTSManagerModule", "Failed to write WAV file: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Converts an Int to 4-byte little-endian array
+     */
+    private fun intToLittleEndian(value: Int): ByteArray {
+        return byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte(),
+            ((value shr 16) and 0xFF).toByte(),
+            ((value shr 24) and 0xFF).toByte()
+        )
+    }
+
+    /**
+     * Converts a Short to 2-byte little-endian array
+     */
+    private fun shortToLittleEndian(value: Short): ByteArray {
+        return byteArrayOf(
+            (value.toInt() and 0xFF).toByte(),
+            ((value.toInt() shr 8) and 0xFF).toByte()
+        )
     }
 }

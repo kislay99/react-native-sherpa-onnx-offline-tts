@@ -41,21 +41,60 @@ class TTSManager: RCTEventEmitter, AudioPlayerDelegate {
     @objc(generateAndPlay:sid:speed:resolver:rejecter:)
     func generateAndPlay(_ text: String, sid: Int, speed: Double, resolver: @escaping RCTPromiseResolveBlock, rejecter: @escaping RCTPromiseRejectBlock) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         guard !trimmedText.isEmpty else {
             rejecter("EMPTY_TEXT", "Input text is empty", nil)
             return
         }
-        
+
         // Split the text into manageable sentences
         let sentences = splitText(trimmedText, maxWords: 15)
-        
+
         for sentence in sentences {
             let processedSentence = sentence.hasSuffix(".") ? sentence : "\(sentence)."
             generateAudio(for: processedSentence, sid: sid, speed: speed)
         }
-        
+
         resolver("Audio generated and played successfully")
+    }
+
+    // Generate audio and save to WAV file
+    @objc(generate:sid:speed:resolver:rejecter:)
+    func generate(_ text: String, sid: Int, speed: Double, resolver: @escaping RCTPromiseResolveBlock, rejecter: @escaping RCTPromiseRejectBlock) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedText.isEmpty else {
+            rejecter("EMPTY_TEXT", "Input text is empty", nil)
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                rejecter("INTERNAL_ERROR", "TTS manager deallocated", nil)
+                return
+            }
+
+            guard let audio = self.tts?.generate(text: trimmedText, sid: sid, speed: Float(speed)) else {
+                rejecter("GENERATION_ERROR", "TTS generation failed. Ensure TTS is initialized.", nil)
+                return
+            }
+
+            let timestamp = Int(Date().timeIntervalSince1970)
+            let uuid = UUID().uuidString.prefix(8)
+            let filename = "tts_output_\(timestamp)_\(uuid).wav"
+            let tempDir = NSTemporaryDirectory()
+            let filePath = (tempDir as NSString).appendingPathComponent(filename)
+
+            let result = audio.save(filename: filePath)
+
+            DispatchQueue.main.async {
+                if result == 1 {
+                    resolver(filePath)
+                } else {
+                    rejecter("FILE_WRITE_ERROR", "Failed to save audio to file", nil)
+                }
+            }
+        }
     }
 
     /// Splits the input text into sentences with a maximum of `maxWords` words.
