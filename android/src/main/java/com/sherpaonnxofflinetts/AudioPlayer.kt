@@ -18,6 +18,11 @@ class AudioPlayer(
     private val audioQueue = LinkedBlockingQueue<FloatArray>()
     @Volatile private var isRunning = false
     @Volatile private var sentCompletion = false          // ← NEW
+    @Volatile private var enqueueClosed = true
+    @Volatile private var didSignalFinish = false
+    @Volatile private var playbackId: Int = 0
+    @Volatile private var pendingWrites = 0
+
 
     private var playbackThread: Thread? = null
 
@@ -49,6 +54,7 @@ class AudioPlayer(
     }
 
     fun start() {
+        if (isRunning) return
         val channelConfig = if (channels == 1)
             AudioFormat.CHANNEL_OUT_MONO
         else
@@ -91,7 +97,7 @@ class AudioPlayer(
         mainHandler.post(volumeUpdateRunnable)
 
         playbackThread = Thread {
-            Log.d("kislaytest", "Playback thread started.")
+            Log.d("audioplayer", "Playback thread started.")
             while (isRunning) {
                 try {
                     val samples = audioQueue.take()
@@ -99,9 +105,12 @@ class AudioPlayer(
                         accumulationBuffer.addAll(samples.asList())
                         processAccumulatedSamples()
                     }
+                    pendingWrites += 1
                     audioTrack?.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
-                    maybeSendCompletion()                   // ← NEW
+                    pendingWrites -= 1
+                    maybeSendCompletion()
                 } catch (e: InterruptedException) {
+                    isRunning = false
                     break
                 }
             }
@@ -122,7 +131,9 @@ class AudioPlayer(
 
     fun enqueueAudioData(samples: FloatArray, sr: Int) {
         if (sr != sampleRate) throw IllegalArgumentException("Sample rate mismatch")
-        sentCompletion = false                              // ← reset
+        sentCompletion = false
+        didSignalFinish = false
+        enqueueClosed = false
         audioQueue.offer(samples)
     }
 
@@ -137,13 +148,35 @@ class AudioPlayer(
 
     // Completion helper
     private fun maybeSendCompletion() {
-        if (!sentCompletion && audioQueue.isEmpty() && accumulationBuffer.isEmpty()) {
+        if (didSignalFinish) return
+
+        val finished =
+            enqueueClosed &&
+            audioQueue.isEmpty() &&
+            pendingWrites == 0
+
+        if (finished) {
+            didSignalFinish = true
             sentCompletion = true
+
+            // cleanup (optional but good)
+            synchronized(this) {
+                accumulationBuffer.clear()
+                volumesQueue.clear()
+            }
+
             mainHandler.post { delegate?.didUpdateVolume(-1f) }
         }
     }
 
+
+
     fun stopPlayer() {
+        if (!isRunning) {
+            // still emit completion so JS can resolve if needed
+            mainHandler.post { delegate?.didUpdateVolume(-1f) }
+            return
+        }
         isRunning = false
         playbackThread?.interrupt()
         playbackThread?.join()
@@ -159,6 +192,36 @@ class AudioPlayer(
             volumesQueue.clear()
         }
 
+        enqueueClosed = true
+        didSignalFinish = true
+        sentCompletion = true
+
         mainHandler.post { delegate?.didUpdateVolume(-1f) } // ← now sends -1
+    }
+
+    fun beginPlayback(id: Int) {
+        playbackId = id
+        enqueueClosed = false
+        didSignalFinish = false
+        sentCompletion = false
+        pendingWrites = 0
+
+        audioQueue.clear()
+        synchronized(this) {
+            accumulationBuffer.clear()
+            volumesQueue.clear()
+        }
+
+        if (!isRunning) {
+            start() // starts AudioTrack + thread + volume timer
+        }
+    }
+
+    fun endEnqueue() {
+        enqueueClosed = true
+        synchronized(this) {
+            accumulationBuffer.clear()
+        }
+        maybeSendCompletion() 
     }
 }

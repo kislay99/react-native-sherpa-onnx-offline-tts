@@ -1,6 +1,6 @@
 {
   "name": "react-native-sherpa-onnx-offline-tts",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "This module is wrapper over sherpa onnx for tts",
   "source": "./src/index.tsx",
   "main": "./lib/commonjs/index.js",

@@ -7,13 +7,17 @@ import React
 // Define a protocol for volume updates
 protocol AudioPlayerDelegate: AnyObject {
     func didUpdateVolume(_ volume: Float)
+    func didFinishPlayback(_ playbackId: Int)
 }
 
 @objc(TTSManager)
 class TTSManager: RCTEventEmitter, AudioPlayerDelegate {
     private var tts: SherpaOnnxOfflineTtsWrapper?
     private var realTimeAudioPlayer: AudioPlayer?
-    
+    private var playbackSeq: Int = 0
+    private var activePlaybackId: Int = 0
+    private var pendingPromises: [Int: (resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock)] = [:]
+
     override init() {
         super.init()
         // Optionally, initialize AudioPlayer here if needed
@@ -39,24 +43,40 @@ class TTSManager: RCTEventEmitter, AudioPlayerDelegate {
 
     // Generate audio and play in real-time
     @objc(generateAndPlay:sid:speed:resolver:rejecter:)
-    func generateAndPlay(_ text: String, sid: Int, speed: Double, resolver: @escaping RCTPromiseResolveBlock, rejecter: @escaping RCTPromiseRejectBlock) {
+    func generateAndPlay(_ text: String, sid: Int, speed: Double,
+                        resolver: @escaping RCTPromiseResolveBlock,
+                        rejecter: @escaping RCTPromiseRejectBlock) {
+
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        
         guard !trimmedText.isEmpty else {
             rejecter("EMPTY_TEXT", "Input text is empty", nil)
             return
         }
-        
-        // Split the text into manageable sentences
+
+        guard tts != nil, let player = realTimeAudioPlayer else {
+            rejecter("NOT_INITIALIZED", "TTS is not initialized", nil)
+            return
+        }
+
+        // new playback id
+        playbackSeq += 1
+        let playbackId = playbackSeq
+        activePlaybackId = playbackId
+        pendingPromises[playbackId] = (resolve: resolver, reject: rejecter)
+
+        // IMPORTANT: this sets the same playbackId inside AudioPlayer
+        player.beginPlayback(playbackId: playbackId)
+
         let sentences = splitText(trimmedText, maxWords: 15)
-        
         for sentence in sentences {
             let processedSentence = sentence.hasSuffix(".") ? sentence : "\(sentence)."
             generateAudio(for: processedSentence, sid: sid, speed: speed)
         }
-        
-        resolver("Audio generated and played successfully")
+
+        // IMPORTANT: tells AudioPlayer no more buffers are coming
+        player.endEnqueue()
     }
+
 
     /// Splits the input text into sentences with a maximum of `maxWords` words.
     /// It prefers to split at a period (.), then a comma (,), and finally forcibly after `maxWords`.
@@ -115,14 +135,34 @@ class TTSManager: RCTEventEmitter, AudioPlayerDelegate {
     
     // Clean up resources
     @objc func deinitialize() {
-        self.realTimeAudioPlayer?.stop()
+        for (_, p) in pendingPromises {
+            p.reject("STOPPED", "Playback stopped by deinitialize()", nil)
+        }
+        pendingPromises.removeAll()
+
+        self.realTimeAudioPlayer?.stopAndTearDown()
         self.realTimeAudioPlayer = nil
+        self.tts = nil
     }
     
+    func didFinishPlayback(_ playbackId: Int) {
+        if let p = pendingPromises.removeValue(forKey: playbackId) {
+            p.resolve("Playback finished")
+        }
+    }
+
     // MARK: - AudioPlayerDelegate Method
     
     func didUpdateVolume(_ volume: Float) {
-        // Emit the volume to JavaScript
+        // send to JS
         sendEvent(withName: "VolumeUpdate", body: ["volume": volume])
+
+        // fallback: -1 means playback finished
+        if volume == -1.0 {
+            let id = activePlaybackId
+            if let p = pendingPromises.removeValue(forKey: id) {
+                p.resolve("Playback finished")
+            }
+        }
     }
 }
