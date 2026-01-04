@@ -7,6 +7,7 @@ import {
   Animated,
   StyleSheet,
   Text,
+  TextInput,
   ActivityIndicator,
   Alert,
 } from 'react-native';
@@ -20,9 +21,26 @@ const App = () => {
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isInitialized, setIsintialized] = useState<boolean>(true);
+  const [savePath, setSavePath] = useState(''); // optional
+  const [status, setStatus] = useState('');
   // References
   const animatedScale = useRef(new Animated.Value(1)).current;
   const downloadJobIdRef = useRef<number | null>(null); // To track the download job
+
+  const onSaveAudio = async () => {
+    try {
+      setStatus('Saving...');
+      const outPath: string = await TTSManager.generateAndSave(
+        'Hello world, this is Lorem Ipsum.', // whatever your current text state variable is
+        savePath.trim() || undefined
+      );
+      setStatus(`Audio saved at: ${outPath}`);
+      console.log('Audio saved at:', outPath);
+    } catch (e: any) {
+      console.error(e);
+      setStatus(`Save failed: ${e?.message ?? String(e)}`);
+    }
+  };
 
   const initializeTTS = async () => {
     try {
@@ -336,6 +354,20 @@ const App = () => {
               disabled={!isPlaying}
             />
           </View>
+          <Text style={{ marginTop: 16 }}>Save path (optional)</Text>
+          <TextInput
+            value={savePath}
+            onChangeText={setSavePath}
+            placeholder="Absolute .wav path OR directory (leave empty for default)"
+            style={{ borderWidth: 1, padding: 8, marginTop: 8 }}
+          />
+
+          <View style={{ marginTop: 12 }}>
+            <Button title="Save Audio" onPress={onSaveAudio} />
+          </View>
+
+          {status ? <Text style={{ marginTop: 12 }}>{status}</Text> : null}
+
           <View style={styles.volumeContainer}>
             <Text>Current Volume: {volume.toFixed(2)}</Text>
           </View>

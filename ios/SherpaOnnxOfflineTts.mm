@@ -15,4 +15,10 @@ RCT_EXTERN_METHOD(generateAndPlay:(NSString *)text
 // Deinitialize method exposed to React Native
 RCT_EXTERN_METHOD(deinitialize)
 
+RCT_EXTERN_METHOD(generateAndSave:(NSString *)text
+                  path:(NSString *)path
+                  fileType:(NSString *)fileType
+                  resolver:(RCTPromiseResolveBlock)resolver
+                  rejecter:(RCTPromiseRejectBlock)rejecter)
+
 @end
