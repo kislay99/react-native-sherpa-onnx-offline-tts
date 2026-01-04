@@ -203,6 +203,57 @@ class TTSManagerModule(private val reactContext: ReactApplicationContext) : Reac
         stopping = false
     }
 
+    @ReactMethod
+    fun generateAndSave(text: String, path: String?, fileType: String?, promise: Promise) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            promise.reject("EMPTY_TEXT", "Input text is empty")
+            return
+        }
+
+        val engine = tts
+        if (engine == null) {
+            promise.reject("NOT_INITIALIZED", "TTS is not initialized")
+            return
+        }
+
+        val ft = (fileType ?: "wav").lowercase()
+        if (ft != "wav") {
+            promise.reject("UNSUPPORTED_FILETYPE", "Only wav is supported right now")
+            return
+        }
+
+        thread {
+            try {
+                val sentences = splitText(trimmed, 15)
+                val all = ArrayList<Float>(22050 * 10)
+
+                var sr = 22050
+                val ch = 1
+
+                for (s in sentences) {
+                    val processed = if (s.endsWith(".")) s else "$s."
+                    val audio = engine.generate(processed, 0, 1.0f)
+                        ?: throw IllegalStateException("Audio generation failed")
+                    sr = audio.sampleRate
+                    all.addAll(audio.samples.asList())
+                }
+
+                val outFile = resolveOutputFile(path, "wav")
+                writeWavPCM16(outFile, all.toFloatArray(), sr, ch)
+
+                reactContext.runOnUiQueueThread {
+                    promise.resolve(outFile.absolutePath)
+                }
+            } catch (e: Exception) {
+                reactContext.runOnUiQueueThread {
+                    promise.reject("SAVE_ERROR", e.message, e)
+                }
+            }
+        }
+    }
+
+
     // Helper: split text into manageable chunks similar to iOS logic
     private fun splitText(text: String, maxWords: Int): List<String> {
         val sentences = mutableListOf<String>()
@@ -262,6 +313,67 @@ class TTSManagerModule(private val reactContext: ReactApplicationContext) : Reac
             reactContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("VolumeUpdate", params)
+        }
+    }
+
+    private fun resolveOutputFile(path: String?, ext: String): File {
+        fun defaultFile(): File =
+            File(reactContext.cacheDir, "tts_${System.currentTimeMillis()}.$ext")
+
+        if (path.isNullOrBlank()) return defaultFile()
+
+        val f = File(path)
+        val target = if (f.isAbsolute) f else File(reactContext.filesDir, path)
+
+        return if (target.name.endsWith(".$ext", ignoreCase = true)) {
+            target.parentFile?.mkdirs()
+            target
+        } else {
+            target.mkdirs()
+            File(target, "tts_${System.currentTimeMillis()}.$ext")
+        }
+    }
+
+    private fun writeWavPCM16(out: File, floatSamples: FloatArray, sampleRate: Int, channels: Int) {
+        out.parentFile?.mkdirs()
+
+        // Float [-1..1] -> PCM16 LE
+        val pcm = ByteArray(floatSamples.size * 2)
+        var i = 0
+        for (f in floatSamples) {
+            val c = f.coerceIn(-1f, 1f)
+            val s = (c * 32767f).toInt().toShort()
+            pcm[i++] = (s.toInt() and 0xFF).toByte()
+            pcm[i++] = ((s.toInt() shr 8) and 0xFF).toByte()
+        }
+
+        val byteRate = sampleRate * channels * 2
+        val blockAlign = (channels * 2).toShort()
+        val dataSize = pcm.size
+        val riffSize = 36 + dataSize
+
+        FileOutputStream(out).use { os ->
+            fun wStr(s: String) = os.write(s.toByteArray(Charsets.US_ASCII))
+            fun wI32(v: Int) = os.write(byteArrayOf(
+                (v and 0xFF).toByte(),
+                ((v shr 8) and 0xFF).toByte(),
+                ((v shr 16) and 0xFF).toByte(),
+                ((v shr 24) and 0xFF).toByte()
+            ))
+            fun wI16(v: Short) = os.write(byteArrayOf(
+                (v.toInt() and 0xFF).toByte(),
+                ((v.toInt() shr 8) and 0xFF).toByte()
+            ))
+
+            wStr("RIFF"); wI32(riffSize); wStr("WAVE")
+            wStr("fmt "); wI32(16); wI16(1) // PCM
+            wI16(channels.toShort())
+            wI32(sampleRate)
+            wI32(byteRate)
+            wI16(blockAlign)
+            wI16(16) // bits
+            wStr("data"); wI32(dataSize)
+            os.write(pcm)
         }
     }
 }
