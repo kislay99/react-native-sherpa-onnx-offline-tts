@@ -125,6 +125,39 @@ const App = () => {
 };
 ```
 
+## Building the source
+```
+# 1) Clone
+git clone https://github.com/kislay99/react-native-sherpa-onnx-offline-tts.git
+cd react-native-sherpa-onnx-offline-tts
+
+# 2) Use repo Node version (requires nvm)
+nvm install
+nvm use
+
+# 3) Install JS deps (repo uses Yarn via Corepack)
+cd example
+corepack enable
+yarn install
+
+# 4) Install iOS pods (Bundler-managed CocoaPods)
+cd example/ios
+gem install bundler
+bundle install
+rm -rf Pods Podfile.lock build
+bundle exec pod install
+
+# 5) Run on iOS Simulator
+cd ..
+open -a Simulator
+yarn ios --simulator "iPhone 15"
+
+# For checking simulator logs
+xcrun simctl spawn booted log stream --style compact \
+  --predicate 'process == "SherpaOnnxOfflineTtsExample"'
+
+```
+
 ---
 
 ## 🤝 Contributing

@@ -1,24 +1,22 @@
 const path = require('path');
-const { getDefaultConfig } = require('@react-native/metro-config');
-const { getConfig } = require('react-native-builder-bob/metro-config');
-const pkg = require('../package.json');
+const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
 
-const root = path.resolve(__dirname, '..');
+const projectRoot = __dirname; // example/
+const workspaceRoot = path.resolve(projectRoot, '..'); // repo root
 
-/**
- * Metro configuration
- * https://facebook.github.io/metro/docs/configuration
- *
- * @type {import('metro-config').MetroConfig}
- */
-module.exports = {
-  ...getConfig(getDefaultConfig(__dirname), {
-    root,
-    pkg,
-    project: __dirname,
-  }),
+module.exports = mergeConfig(getDefaultConfig(projectRoot), {
+  watchFolders: [workspaceRoot],
   resolver: {
-    assetExts: [...getDefaultConfig(__dirname).resolver.assetExts, 'zip'],
+    // Force metro to resolve *all* packages from the repo root node_modules
+    extraNodeModules: new Proxy(
+      {},
+      {
+        get: (_, name) => path.join(workspaceRoot, 'node_modules', name),
+      }
+    ),
+    nodeModulesPaths: [
+      path.join(workspaceRoot, 'node_modules'),
+      path.join(projectRoot, 'node_modules'),
+    ],
   },
-  watchFolders: [root], // Include the library's root directory
-};
+});

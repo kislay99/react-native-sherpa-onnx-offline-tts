@@ -81,6 +81,10 @@ class TTSManagerModule(private val reactContext: ReactApplicationContext) : Reac
     private var tts: OfflineTts? = null
     private var realTimeAudioPlayer: AudioPlayer? = null
     private val modelLoader = ModelLoader(reactContext)
+    private var playbackSeq: Int = 0
+    @Volatile private var activePlaybackId: Int = 0
+    @Volatile private var stopping = false
+    private var pendingPromise: Promise? = null
 
     override fun getName(): String {
         return "TTSManager"
@@ -93,8 +97,17 @@ class TTSManagerModule(private val reactContext: ReactApplicationContext) : Reac
         realTimeAudioPlayer = AudioPlayer(sampleRate.toInt(), channels, object : AudioPlayerDelegate {
             override fun didUpdateVolume(volume: Float) {
                 sendVolumeUpdate(volume)
+
+                if (volume == -1f) {
+                    if (stopping) return  // ignore completion emitted by stopPlayer()
+
+                    val p = pendingPromise
+                    pendingPromise = null
+                    p?.resolve("Playback finished")
+                }
             }
         })
+
 
         // Determine model paths based on modelId
         
@@ -139,26 +152,55 @@ class TTSManagerModule(private val reactContext: ReactApplicationContext) : Reac
             return
         }
 
-        val sentences = splitText(trimmedText, 15)
-            try {
-                for (sentence in sentences) {
-                    val processedSentence = if (sentence.endsWith(".")) sentence else "$sentence."
-                    generateAudio(processedSentence, sid, speed.toFloat())
-                }
-                // Once done generating and enqueueing all audio, resolve the promise
-                promise.resolve("Audio generated and played successfully")
-            } catch (e: Exception) {
-                promise.reject("GENERATION_ERROR", "Error during audio generation: ${e.message}")
+        val player = realTimeAudioPlayer
+        val engine = tts
+        if (player == null || engine == null) {
+            promise.reject("NOT_INITIALIZED", "TTS is not initialized")
+            return
+        }
+
+        // cancel any previous pending call (avoid dangling promises)
+        pendingPromise?.resolve("Interrupted")
+        pendingPromise = promise
+
+        playbackSeq += 1
+        val playbackId = playbackSeq
+        activePlaybackId = playbackId
+
+        player.beginPlayback(playbackId)
+
+        try {
+            val sentences = splitText(trimmedText, 15)
+            for (sentence in sentences) {
+                val processedSentence = if (sentence.endsWith(".")) sentence else "$sentence."
+                generateAudio(processedSentence, sid, speed.toFloat())
             }
+            // IMPORTANT: tell player no more buffers are coming
+            player.endEnqueue()
+            // DO NOT resolve here; resolved when volume == -1
+        } catch (e: Exception) {
+            pendingPromise = null
+            promise.reject("GENERATION_ERROR", "Error during audio generation: ${e.message}")
+        }
     }
+
 
     // Deinitialize method exposed to React Native
     @ReactMethod
     fun deinitialize() {
+        stopping = true
+
+        // resolve any in-flight promise as a normal stop
+        pendingPromise?.resolve("Playback stopped")
+        pendingPromise = null
+
         realTimeAudioPlayer?.stopPlayer()
         realTimeAudioPlayer = null
+
         tts?.release()
         tts = null
+
+        stopping = false
     }
 
     // Helper: split text into manageable chunks similar to iOS logic

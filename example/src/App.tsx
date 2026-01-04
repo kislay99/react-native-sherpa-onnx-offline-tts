@@ -12,135 +12,251 @@ import {
 } from 'react-native';
 import TTSManager from 'react-native-sherpa-onnx-offline-tts'; // Import your native module
 import RNFS from 'react-native-fs'; // For file system operations
-import { unzip } from 'react-native-zip-archive'; // For unzipping archives
 
 const App = () => {
   // State variables
-  const [volume, _setVolume] = useState(0);
+  const [volume, setVolume] = useState(0);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-
+  const [isInitialized, setIsintialized] = useState<boolean>(true);
   // References
   const animatedScale = useRef(new Animated.Value(1)).current;
   const downloadJobIdRef = useRef<number | null>(null); // To track the download job
 
-  useEffect(() => {
-    console.log('VolumeUpdate listener registered');
-    /**
-     * Initializes the TTS system by downloading and setting up the model.
-     */
-    const initializeTTS = async () => {
-      try {
-        setIsDownloading(true);
+  const initializeTTS = async () => {
+    try {
+      setIsDownloading(true);
+      setDownloadProgress(0);
 
-        // Define the model download URL
-        const modelUrl =
-          'https://vocabfalconttsmodels.s3.us-east-1.amazonaws.com/vits-piper-en_US-ryan-medium.zip'; // Replace with your ZIP URL
+      // ---- Hugging Face config ----
+      const HF_REPO_ID = 'csukuangfj/vits-piper-en_US-ryan-medium';
+      const HF_REVISION = 'main';
 
-        // Define the destination path for the archive
-        const archiveFileName = 'vits-piper-en_US-ryan-medium.zip';
-        const archiveFilePath = `${RNFS.DocumentDirectoryPath}/${archiveFileName}`;
+      const encodePath = (p: string) =>
+        p.split('/').map(encodeURIComponent).join('/');
 
-        // Define the extraction path
-        const extractPath = `${RNFS.DocumentDirectoryPath}/extracted`;
+      const hfResolveUrl = (pathInRepo: string) =>
+        `https://huggingface.co/${HF_REPO_ID}/resolve/${HF_REVISION}/${encodePath(
+          pathInRepo
+        )}?download=true`;
 
-        // Check if the archive already exists to prevent redundant downloads
-        const fileExists = await RNFS.exists(archiveFilePath);
-        if (fileExists) {
-          console.log('Archive already exists. Skipping download.');
-          setIsDownloading(false);
-          setDownloadProgress(100);
+      const hfModelMetaUrl = `https://huggingface.co/api/models/${HF_REPO_ID}`;
 
-          // Extract if not already extracted
-          const extractionExists = await RNFS.exists(
-            `${extractPath}/vits-piper-en_US-ryan-medium/en_US-ryan-medium.onnx`
-          );
-          if (!extractionExists) {
-            await extractArchive(archiveFilePath, extractPath);
-          }
+      // ---- Local paths (keep your existing extracted layout) ----
+      const extractPath = `${RNFS.DocumentDirectoryPath}/extracted`;
+      const modelDir = `${extractPath}/vits-piper-en_US-ryan-medium`;
 
-          // Initialize TTS with the extracted model
-          const modelPath = `${extractPath}/vits-piper-en_US-ryan-medium/en_US-ryan-medium.onnx`;
-          const tokensPath = `${extractPath}/vits-piper-en_US-ryan-medium/tokens.txt`;
-          const dataDirPath = `${extractPath}/vits-piper-en_US-ryan-medium/espeak-ng-data`;
+      const modelPath = `${modelDir}/en_US-ryan-medium.onnx`;
+      const tokensPath = `${modelDir}/tokens.txt`;
+      const dataDirPath = `${modelDir}/espeak-ng-data`;
 
-          const modelIdJson = JSON.stringify({
-            modelPath,
-            tokensPath,
-            dataDirPath,
-          });
+      const ensureDirForFile = async (filePath: string) => {
+        const dir = filePath.slice(0, filePath.lastIndexOf('/'));
+        if (dir) await RNFS.mkdir(dir);
+      };
 
-          await TTSManager.initialize(modelIdJson);
-          console.log('TTS Initialized Successfully with existing model');
-          return;
+      const dirHasFiles = async (dirPath: string) => {
+        try {
+          const items = await RNFS.readDir(dirPath);
+          return items.length > 0;
+        } catch {
+          return false;
         }
+      };
 
-        // Start downloading the archive
-        const downloadOptions = {
-          fromUrl: modelUrl,
-          toFile: archiveFilePath,
-          background: true,
-          discretionary: true,
-          progressDivider: 1,
-          begin: (_res: RNFS.DownloadBeginCallbackResult) => {
-            console.log('Download started');
-          },
-          progress: (res: RNFS.DownloadProgressCallbackResult) => {
-            const progress = res.bytesWritten / res.contentLength;
-            setDownloadProgress(progress * 100);
-          },
-        };
+      await RNFS.mkdir(modelDir);
 
-        console.log('Starting download...');
-        const ret = RNFS.downloadFile(downloadOptions);
-        downloadJobIdRef.current = ret.jobId;
+      // ---- If already downloaded, init immediately ----
+      const alreadyThere =
+        (await RNFS.exists(modelPath)) &&
+        (await RNFS.exists(tokensPath)) &&
+        (await RNFS.exists(dataDirPath)) &&
+        (await dirHasFiles(dataDirPath));
 
-        const result = await ret.promise;
-
-        if (result.statusCode === 200) {
-          console.log('Finished downloading to ', archiveFilePath);
-          setDownloadProgress(100);
-        } else {
-          throw new Error(
-            `Failed to download archive. Status code: ${result.statusCode}`
-          );
-        }
-
+      if (alreadyThere) {
+        setIsintialized(true);
         setIsDownloading(false);
-
-        // Extract the archive
-        await extractArchive(archiveFilePath, extractPath);
-
-        // Initialize TTS with the extracted model
-        const modelPath = `${extractPath}/vits-piper-en_US-ryan-medium/en_US-ryan-medium.onnx`;
-        const tokensPath = `${extractPath}/vits-piper-en_US-ryan-medium/tokens.txt`;
-        const dataDirPath = `${extractPath}/vits-piper-en_US-ryan-medium/espeak-ng-data`;
+        setDownloadProgress(100);
 
         const modelIdJson = JSON.stringify({
           modelPath,
           tokensPath,
           dataDirPath,
         });
-
         await TTSManager.initialize(modelIdJson);
-        console.log('TTS Initialized Successfully with new model');
-      } catch (error) {
-        setIsDownloading(false);
-        setDownloadProgress(0);
-        console.error('Error initializing TTS:', error);
-        Alert.alert(
-          'Initialization Error',
-          'Failed to initialize TTS. Please try again.'
+        console.log(
+          'TTS Initialized Successfully with existing HuggingFace model'
+        );
+        return;
+      }
+
+      // ---- List all files in the repo (so we can download espeak-ng-data/*) ----
+      const metaRes = await fetch(hfModelMetaUrl);
+      if (!metaRes.ok) {
+        throw new Error(
+          `Failed to fetch Hugging Face metadata: ${metaRes.status}`
         );
       }
-    };
+
+      const metaJson: any = await metaRes.json();
+      const siblings: Array<{ rfilename: string; size?: number }> =
+        metaJson?.siblings ?? [];
+
+      const requiredRepoFiles = [
+        'en_US-ryan-medium.onnx',
+        'tokens.txt',
+        // download *all* files under espeak-ng-data/
+        ...siblings
+          .map((s) => s.rfilename)
+          .filter((name) => name.startsWith('espeak-ng-data/')),
+      ];
+
+      // De-dupe while preserving order
+      const seen = new Set<string>();
+      const filesToDownload = requiredRepoFiles.filter((f) => {
+        if (seen.has(f)) return false;
+        seen.add(f);
+        return true;
+      });
+
+      // Build size map (used for overall progress)
+      const sizeByFile = new Map<string, number>();
+      for (const s of siblings) {
+        if (typeof s?.rfilename === 'string' && typeof s?.size === 'number') {
+          sizeByFile.set(s.rfilename, s.size);
+        }
+      }
+
+      // If HF API didn't return sizes for some, treat as 0 (progress still works but less accurate)
+      const totalBytes = filesToDownload.reduce(
+        (sum, f) => sum + (sizeByFile.get(f) ?? 0),
+        0
+      );
+
+      // Track per-file bytes written for aggregate progress
+      const writtenByFile = new Map<string, number>();
+      let completedBytes = 0;
+
+      const updateOverallProgress = () => {
+        if (totalBytes <= 0) return; // unknown total, skip aggregate
+        let writtenSum = completedBytes;
+        for (const v of writtenByFile.values()) writtenSum += v;
+        const pct = Math.min(100, (writtenSum / totalBytes) * 100);
+        setDownloadProgress(pct);
+      };
+
+      // Pre-mark bytes for files that already exist
+      for (const repoPath of filesToDownload) {
+        const localPath = `${modelDir}/${repoPath}`;
+        if (await RNFS.exists(localPath)) {
+          completedBytes += sizeByFile.get(repoPath) ?? 0;
+        }
+      }
+      updateOverallProgress();
+
+      // ---- Download sequentially (simpler + stable progress) ----
+      for (const repoPath of filesToDownload) {
+        const localPath = `${modelDir}/${repoPath}`;
+
+        // Skip if already present
+        const exists = await RNFS.exists(localPath);
+        if (exists) continue;
+
+        await ensureDirForFile(localPath);
+
+        const fromUrl = hfResolveUrl(repoPath);
+
+        await new Promise<void>((resolve, reject) => {
+          writtenByFile.set(repoPath, 0);
+
+          const ret = RNFS.downloadFile({
+            fromUrl,
+            toFile: localPath,
+            background: true,
+            discretionary: true,
+            progressDivider: 1,
+            begin: () => {
+              console.log('Download started:', repoPath);
+            },
+            progress: (res: RNFS.DownloadProgressCallbackResult) => {
+              // bytesWritten is for this file
+              writtenByFile.set(repoPath, res.bytesWritten);
+              updateOverallProgress();
+            },
+          });
+
+          // Keep last job id (best-effort compatibility with your cancel logic)
+          downloadJobIdRef.current = ret.jobId;
+
+          ret.promise
+            .then((result) => {
+              if (result.statusCode === 200) {
+                // Move this file's bytes into completedBytes and clear active tracking
+                completedBytes += sizeByFile.get(repoPath) ?? 0;
+                writtenByFile.delete(repoPath);
+                updateOverallProgress();
+                console.log('Downloaded:', repoPath);
+                resolve();
+              } else {
+                reject(
+                  new Error(
+                    `Failed to download ${repoPath}. Status: ${result.statusCode}`
+                  )
+                );
+              }
+            })
+            .catch(reject);
+        });
+      }
+
+      // Ensure minimum required files exist before init
+      const ok =
+        (await RNFS.exists(modelPath)) &&
+        (await RNFS.exists(tokensPath)) &&
+        (await RNFS.exists(dataDirPath)) &&
+        (await dirHasFiles(dataDirPath));
+
+      if (!ok) {
+        throw new Error(
+          'Model download incomplete: missing model/tokens/espeak-ng-data'
+        );
+      }
+
+      setIsDownloading(false);
+      setDownloadProgress(100);
+
+      const modelIdJson = JSON.stringify({
+        modelPath,
+        tokensPath,
+        dataDirPath,
+      });
+      await TTSManager.initialize(modelIdJson);
+      console.log('TTS Initialized Successfully with HuggingFace model');
+    } catch (error) {
+      setIsDownloading(false);
+      setDownloadProgress(0);
+      console.error('Error initializing TTS:', error);
+      Alert.alert(
+        'Initialization Error',
+        'Failed to initialize TTS. Please try again.'
+      );
+    }
+  };
+
+  useEffect(() => {
+    const subscription = TTSManager.addVolumeListener((v: any) => {
+      setVolume(v);
+    });
+
+    console.log('VolumeUpdate listener registered');
+
     // Initialize TTS after registering the listener
     initializeTTS();
 
     // Cleanup on unmount
     return () => {
-      // subscription.remove();
+      subscription.remove();
       TTSManager.deinitialize();
 
       // Cancel any ongoing download if necessary
@@ -153,62 +269,18 @@ const App = () => {
   }, [animatedScale]);
 
   /**
-   * Extracts the downloaded ZIP archive.
-   * @param archivePath Path to the ZIP archive.
-   * @param destinationPath Path where the archive should be extracted.
-   */
-  const extractArchive = async (
-    archivePath: string,
-    destinationPath: string
-  ) => {
-    try {
-      // Ensure the destination directory exists
-      const destExists = await RNFS.exists(destinationPath);
-      if (!destExists) {
-        await RNFS.mkdir(destinationPath);
-        console.log(`Created directory: ${destinationPath}`);
-      }
-
-      // Extract the ZIP archive
-      console.log('Starting extraction...');
-      await unzip(archivePath, destinationPath);
-      console.log('Extraction completed.');
-
-      // Function to recursively list files (for debugging purposes)
-      const listFilesRecursively = async (
-        path: string,
-        prefix: string = ''
-      ) => {
-        const items = await RNFS.readDir(path);
-        for (const item of items) {
-          if (item.isDirectory()) {
-            console.log(`${prefix}- Directory: ${item.name} (${item.path})`);
-            await listFilesRecursively(item.path, `${prefix}  `);
-          } else if (item.isFile()) {
-            console.log(`${prefix}- File: ${item.name} (${item.path})`);
-          }
-        }
-      };
-
-      // List all extracted files recursively
-      console.log('Listing extracted files:');
-      await listFilesRecursively(destinationPath);
-    } catch (error) {
-      console.error('Error extracting archive:', error);
-      throw error;
-    }
-  };
-
-  /**
    * Handles the Play Audio button press.
    */
   const handlePlay = async () => {
     try {
       const text =
-        'In the grand tapestry of the cosmos, the Earth spins silently amidst a sea of celestial wonders, bound by invisible forces that orchestrate the cosmic dance of planets, stars, and galaxies. Humanity, perched on this pale blue dot, has long sought to decipher the enigmatic codes of the universe, gazing upward in awe and wonder. From the ancient astronomers who meticulously charted the heavens to the modern scientists probing the fabric of space-time, the quest for understanding has been a relentless pursuit, driven by an insatiable curiosity that transcends generations.';
+        'In the grand tapestry of the cosmos, every star tells a story, every galaxy holds a secret.';
       const sid = 0; // Example speaker ID or similar
       const speed = 0.85; // Normal speed
-
+      if (!isInitialized) {
+        console.log('isInitialized: ', isInitialized);
+        await initializeTTS();
+      }
       setIsPlaying(true);
       await TTSManager.generateAndPlay(text, sid, speed);
       setIsPlaying(false);
@@ -224,6 +296,7 @@ const App = () => {
    */
   const handleStop = () => {
     TTSManager.deinitialize();
+    setIsintialized(false);
     setIsPlaying(false);
     console.log('Playback stopped.');
   };

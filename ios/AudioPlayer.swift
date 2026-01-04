@@ -23,6 +23,11 @@ class AudioPlayer: NSObject {
     private let queueLock = NSLock()
     private var isProcessing = false
 
+    private var playbackId: Int = 0
+    private var enqueueClosed: Bool = true
+    private var pendingScheduled: Int = 0
+    private var didSignalFinish: Bool = false
+
     // Volume Monitoring
     private var volumeTimer: Timer?
     private var currentVolume: Float = 0.0
@@ -161,16 +166,19 @@ class AudioPlayer: NSObject {
     // Called from every buffer’s completion handler
     private func checkForPlaybackEnd() {
         queueLock.lock()
-        let finished = audioQueue.isEmpty && !audioPlayerNode.isPlaying
+        let finished = enqueueClosed && audioQueue.isEmpty && pendingScheduled == 0
+        let shouldSignal = finished && !didSignalFinish
+        if shouldSignal { didSignalFinish = true }
         queueLock.unlock()
 
-        if finished && !sentCompletion {
-            sentCompletion = true
+        if shouldSignal {
             DispatchQueue.main.async {
-                self.delegate?.didUpdateVolume(-1.0)  // ← notify JS side
+                self.audioPlayerNode.stop()
+                self.delegate?.didUpdateVolume(-1.0) // <-- this will now resolve the promise
             }
         }
     }
+
 
     // MARK: - Volume metering
 
@@ -233,7 +241,61 @@ class AudioPlayer: NSObject {
         }
     }
 
+    func beginPlayback(playbackId: Int) {
+        queueLock.lock()
+        self.playbackId = playbackId
+        self.enqueueClosed = false
+        self.didSignalFinish = false
+        self.pendingScheduled = 0
+        self.audioQueue.removeAll()
+        self.currentVolume = 0
+        queueLock.unlock()
+
+        DispatchQueue.main.async {
+            if !self.audioEngine.isRunning {
+                try? self.audioEngine.start()
+            }
+            self.audioPlayerNode.stop()
+            self.audioPlayerNode.reset()
+        }
+    }
+
+    func endEnqueue() {
+        queueLock.lock()
+        enqueueClosed = true
+        queueLock.unlock()
+        checkForPlaybackEnd()
+    }
+
     // MARK: - Stop
+
+    func stopAndTearDown() {
+        isProcessing = false
+
+        queueLock.lock()
+        audioQueue.removeAll()
+        enqueueClosed = true
+        pendingScheduled = 0
+        queueLock.unlock()
+
+        DispatchQueue.main.async {
+            self.volumeTimer?.invalidate()
+            self.volumeTimer = nil
+
+            self.audioPlayerNode.stop()
+            self.audioPlayerNode.reset()
+
+            self.audioEngine.stop()
+            self.audioEngine.reset()
+
+            self.audioEngine.mainMixerNode.removeTap(onBus: 0)
+
+            self.deactivateAudioSession()
+
+            self.delegate?.didUpdateVolume(-1.0)
+        }
+    }
+
 
     func stop() {
         isProcessing = false

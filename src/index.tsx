@@ -1,41 +1,19 @@
-// TTSManager.js
-
 import { NativeModules, NativeEventEmitter } from 'react-native';
 
-const { TTSManager } = NativeModules;
-const ttsManagerEmitter = new NativeEventEmitter(TTSManager);
+const nativeTTS = NativeModules.TTSManager;
+const emitter = new NativeEventEmitter(nativeTTS);
 
-const initialize = (modelId: string) => {
-  TTSManager.initializeTTS(22050, 1, modelId);
-};
-
-const generateAndPlay = async (text: any, sid: any, speed: any) => {
-  try {
-    const result = await TTSManager.generateAndPlay(text, sid, speed);
-    console.log(result);
-  } catch (error) {
-    console.error(error);
-  }
-};
-
-const deinitialize = () => {
-  TTSManager.deinitialize();
-};
-
-const addVolumeListener = (callback: any) => {
-  const subscription = ttsManagerEmitter.addListener(
-    'VolumeUpdate',
-    (event) => {
-      const { volume } = event;
-      callback(volume);
-    }
-  );
-  return subscription;
+const addVolumeListener = (callback: (v: number) => void) => {
+  let sub = emitter.addListener('VolumeUpdate', (event: any) => {
+    callback(event.volume);
+  });
+  return sub;
 };
 
 export default {
-  initialize,
-  generateAndPlay,
-  deinitialize,
+  initialize: (modelId: string) => nativeTTS.initializeTTS(22050, 1, modelId),
+  generateAndPlay: (text: any, sid: any, speed: any) =>
+    nativeTTS.generateAndPlay(text, sid, speed),
+  deinitialize: () => nativeTTS.deinitialize(),
   addVolumeListener,
 };
