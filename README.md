@@ -80,16 +80,16 @@ async function sayHello() {
 
 ---
 
-## 📚 API Reference
+## 📚 API Reference (Updated)
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| **initialize** | `(modelConfigJson: string): Promise<void>` | Must be called once before any synthesis. Pass a JSON string with `modelPath`, `tokensPath`, `dataDirPath`. |
-| **generate** | `(text: string, speakerId: number, speed: number): Promise<string>` | Generates speech and returns the path of the WAV file. |
-| **generateAndPlay** | `(text: string, speakerId: number, speed: number): Promise<void>` | Generates speech and streams it to the device speaker. |
-| **stopPlaying** | `(): void` | Immediately stops playback. |
-| **addVolumeListener** | `(cb: (volume: number) => void): EmitterSubscription` | Subscribes to real‑time RMS volume callbacks during playback. Call `subscription.remove()` to unsubscribe. |
-| **deinitialize** | `(): void` | Frees native resources – call this when your app unmounts or goes to background for a long time. |
+| **initialize** | `(modelId: string): Promise<void>` | Initializes native TTS with the given `modelId` (internally uses 22050 Hz, mono). Call once before synthesis/playback. |
+| **generateAndPlay** | `(text: string, speakerId: number, speed: number): Promise<void>` | Generates speech and plays it on the device speaker. Emits real-time volume updates while playing (if listener is attached). |
+| **generateAndSave** | `(text: string, path?: string \| null, fileType?: 'wav'): Promise<string>` | Generates speech and saves it to disk. Returns the saved file path. **Only `'wav'` is supported right now**; omit `fileType` to default to `'wav'`. |
+| **addVolumeListener** | `(cb: (volume: number) => void): EmitterSubscription` | Subscribes to real-time RMS volume callbacks during playback. Call `subscription.remove()` to unsubscribe. |
+| **deinitialize** | `(): void` | Frees native resources; call when your app unmounts or you won’t use TTS for a while. |
+
 
 ---
 
